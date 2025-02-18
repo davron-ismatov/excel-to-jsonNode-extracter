@@ -6,8 +6,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
-import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -15,42 +15,20 @@ import java.util.Map;
 
 @Slf4j
 public class ExcelConverter {
-    private static List<String> keys = new ArrayList<>();
-
-
-    public static List<JsonNode> convertExcelToUserData(String filePath) {
+    public static List<JsonNode> convertExcelToJsonNode(InputStream excelFile) {
         List<JsonNode> jsonNodeList = new ArrayList<>();
+        List<String> keys = new ArrayList<>();
 
-        try (FileInputStream fileInputStream = new FileInputStream(filePath)) {
-            Workbook workbook = new XSSFWorkbook(fileInputStream);
-            ObjectMapper objectMapper = new ObjectMapper();
+        try {
+            Workbook workbook = new XSSFWorkbook(excelFile);
             Sheet sheet = workbook.getSheetAt(0);
 
             if (sheet == null) {
                 throw new RuntimeException("Sheet is null");
             }
 
-            for (int i = 0; i < sheet.getPhysicalNumberOfRows(); i++) {
-                Row row = sheet.getRow(i);
-
-                if (i == 0) {
-                    assignKeys(row);
-                    continue;
-                }
-
-                short lastCellNum = row.getLastCellNum();
-                Map<String, Object> map = new HashMap<>();
-
-                for (short cellNum = row.getFirstCellNum(); cellNum < lastCellNum; cellNum++) {
-                    Cell cell = row.getCell(cellNum);
-                    if (cell != null)
-                        putValue(cell, map);
-                }
-
-                JsonNode jsonNode = objectMapper.valueToTree(map);
-
-                jsonNodeList.add(jsonNode);
-            }
+            log.info("Processing physical rows {}", sheet.getPhysicalNumberOfRows());
+            processPhysicalRows(sheet, keys, jsonNodeList);
         } catch (IOException e) {
             log.error(e.getMessage());
         }
@@ -59,7 +37,37 @@ public class ExcelConverter {
         return jsonNodeList;
     }
 
-    private static void putValue(Cell cell, Map<String, Object> map) {
+    private static void processPhysicalRows(Sheet sheet, List<String> keys, List<JsonNode> jsonNodeList) {
+        ObjectMapper objectMapper = new ObjectMapper();
+        for (int i = 0; i < sheet.getPhysicalNumberOfRows(); i++) {
+            Row row = sheet.getRow(i);
+
+            if (i == 0) {
+                assignKeys(row, keys);
+                continue;
+            }
+
+            Map<String, Object> map = new HashMap<>();
+
+            processValueExtraction(row, map, keys);
+
+            JsonNode jsonNode = objectMapper.valueToTree(map);
+            jsonNodeList.add(jsonNode);
+        }
+    }
+
+    private static void processValueExtraction(Row row, Map<String, Object> map, List<String> keys) {
+        short lastCellNum = row.getLastCellNum();
+
+        for (short cellNum = row.getFirstCellNum(); cellNum < lastCellNum; cellNum++) {
+            Cell cell = row.getCell(cellNum);
+
+            if (cell != null)
+                putValue(cell, map, keys);
+        }
+    }
+
+    private static void putValue(Cell cell, Map<String, Object> map, List<String> keys) {
         switch (cell.getCellType()) {
             case STRING -> map.put(keys.get(cell.getColumnIndex()), cell.getStringCellValue());
             case NUMERIC -> map.put(keys.get(cell.getColumnIndex()), cell.getNumericCellValue());
@@ -68,7 +76,7 @@ public class ExcelConverter {
         }
     }
 
-    private static void assignKeys(Row row) {
+    private static void assignKeys(Row row, List<String> keys) {
         log.info("Assigning keys");
 
         row.cellIterator().forEachRemaining(cell -> {
@@ -76,27 +84,27 @@ public class ExcelConverter {
                 return;
             }
 
-            String value = cell.getStringCellValue().trim();
+            String cellValue = cell.getStringCellValue().trim();
 
-            if (value.contains(" ")) {
-                String[] split = value.split(" ");
+            if (cellValue.contains(" ")) {
+                String[] dividedKey = cellValue.split(" ");
 
-                for (int i = 0; i < split.length; i++) {
+                for (int i = 0; i < dividedKey.length; i++) {
                     if (i == 0) {
-                        split[i] = split[i].toLowerCase();
+                        dividedKey[i] = dividedKey[i].toLowerCase();
                         continue;
                     }
 
-                    String string = split[i];
-                    string = string.replace(string.charAt(0), Character.toUpperCase(string.charAt(0)));
-                    split[i] = string;
+                    String keyPart = dividedKey[i];
+                    keyPart = keyPart.replace(keyPart.charAt(0), Character.toUpperCase(keyPart.charAt(0)));
+                    dividedKey[i] = keyPart;
                 }
 
-                value = String.join("", split);
+                cellValue = String.join("", dividedKey);
             } else
-                value = value.toLowerCase();
+                cellValue = cellValue.toLowerCase();
 
-            keys.add(value);
+            keys.add(cellValue);
 
         });
     }
